@@ -1,11 +1,16 @@
+import os
+import os.path as osp
+import sys
+sys.path.append(osp.join(osp.abspath(osp.dirname(__file__)), 'deep_sort'))
+sys.path.append(osp.join(osp.abspath(osp.dirname(__file__)), 'yolov5'))
 from yolov5.utils.general import (
-    check_img_size, non_max_suppression, scale_coords, xyxy2xywh)
-from yolov5.utils.torch_utils import select_device, time_synchronized
-from yolov5.utils.datasets import letterbox
+    check_img_size, non_max_suppression, scale_boxes, xyxy2xywh)
+from yolov5.utils.torch_utils import select_device
+from yolov5.utils.augmentations import letterbox
 
-from utils_ds.parser import get_config
-from utils_ds.draw import draw_boxes
-from deep_sort import build_tracker
+from deep_sort.ds_utils.parser import get_config
+from deep_sort.ds_utils.draw import draw_boxes
+from deep_sort.deep_sort import build_tracker
 
 import argparse
 import os
@@ -15,15 +20,9 @@ import warnings
 import cv2
 import torch
 import torch.backends.cudnn as cudnn
-
 import sys
 
-currentUrl = os.path.dirname(__file__)
-sys.path.append(os.path.abspath(os.path.join(currentUrl, 'yolov5')))
-
-
 cudnn.benchmark = True
-
 
 class VideoTracker(object):
     def __init__(self, args):
@@ -79,7 +78,7 @@ class VideoTracker(object):
         # ************************* Load video from file *************************
         else:
             assert os.path.isfile(self.args.input_path), "Path error"
-            self.vdo.open(self.args.input_path)
+            self.vdo = cv2.VideoCapture(self.args.input_path)
             self.im_width = int(self.vdo.get(cv2.CAP_PROP_FRAME_WIDTH))
             self.im_height = int(self.vdo.get(cv2.CAP_PROP_FRAME_HEIGHT))
             assert self.vdo.isOpened()
@@ -159,8 +158,6 @@ class VideoTracker(object):
                         x1, y1, x2, y2, idx = outputs[i]
                         f.write('{}\t{}\t{}\t{}\t{}\n'.format(x1, y1, x2, y2, idx))
 
-
-
             idx_frame += 1
 
         print('Avg YOLO time (%.3fs), Sort time (%.3fs) per frame' % (sum(yolo_time) / len(yolo_time),
@@ -190,21 +187,23 @@ class VideoTracker(object):
 
         # Detection time *********************************************************
         # Inference
-        t1 = time_synchronized()
+        torch.cuda.synchronize()
+        t1 = time.time()
         with torch.no_grad():
             pred = self.detector(img, augment=self.args.augment)[0]  # list: bz * [ (#obj, 6)]
 
-        # Apply NMS and filter object other than person (cls:0)
+        # Apply NMS
         pred = non_max_suppression(pred, self.args.conf_thres, self.args.iou_thres,
                                    classes=self.args.classes, agnostic=self.args.agnostic_nms)
-        t2 = time_synchronized()
+        torch.cuda.synchronize()
+        t2 = time.time()
 
         # get all obj ************************************************************
         det = pred[0]  # for video, bz is 1
         if det is not None and len(det):  # det: (#obj, 6)  x1 y1 x2 y2 conf cls
 
             # Rescale boxes from img_size to original im0 size
-            det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
+            det[:, :4] = scale_boxes(img.shape[2:], det[:, :4], im0.shape).round()
 
             # Print results. statistics of number of each obj
             for c in det[:, -1].unique():
@@ -227,7 +226,7 @@ class VideoTracker(object):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # input and output
-    parser.add_argument('--input_path', type=str, default='input_480.mp4', help='source')  # file/folder, 0 for webcam
+    parser.add_argument('--input_path', type=str, default='/home/zichen/Documents/202DATA/demo/demo.mp4', help='source')  # file/folder, 0 for webcam
     parser.add_argument('--save_path', type=str, default='output/', help='output folder')  # output folder
     parser.add_argument("--frame_interval", type=int, default=2)
     parser.add_argument('--fourcc', type=str, default='mp4v', help='output video codec (verify ffmpeg support)')
@@ -243,14 +242,14 @@ if __name__ == '__main__':
     # YOLO-V5 parameters
     parser.add_argument('--weights', type=str, default='yolov5/weights/yolov5s.pt', help='model.pt path')
     parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
-    parser.add_argument('--conf-thres', type=float, default=0.5, help='object confidence threshold')
-    parser.add_argument('--iou-thres', type=float, default=0.5, help='IOU threshold for NMS')
-    parser.add_argument('--classes', nargs='+', type=int, default=[0], help='filter by class')
+    parser.add_argument('--conf-thres', type=float, default=0.25, help='object confidence threshold')
+    parser.add_argument('--iou-thres', type=float, default=0.45, help='IOU threshold for NMS')
+    parser.add_argument('--classes', nargs='+', type=int, help='filter by class')
     parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
 
     # deepsort parameters
-    parser.add_argument("--config_deepsort", type=str, default="./configs/deep_sort.yaml")
+
 
     args = parser.parse_args()
     args.img_size = check_img_size(args.img_size)

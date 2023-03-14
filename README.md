@@ -30,10 +30,7 @@ and place `ckpt.t7` file under `deep_sort/deep/checkpoint/`
 ## Run
 ~~~
 # on video file
-python main.py --input_path [VIDEO_FILE_NAME]
-
-# on webcam 
-python main.py --cam 0 --display
+python track.py --source video_path(or video_dir)
 ~~~
 
 
